@@ -18,6 +18,7 @@ import {
 import { categoryVisuals, gradeIndex, themeCopy, visualFor } from "../data/visuals";
 import { catExpressionImage, catProfileFor, catProfiles } from "../data/catVisuals";
 import { clearCloudGame, loadCloudGame, saveCloudGame } from "../data/firebase";
+import { publicPath } from "../lib/publicPath";
 
 type Player = {
   id: number;
@@ -82,8 +83,8 @@ const collectionGradeIndex = (grade: string) =>
   grade === "화려함" ? 3 : grade === "예쁨" ? 2 : grade === "평범함" ? 1 : 0;
 const layerPath = (category: CategoryId, grade: number) =>
   category === "body" && grade >= 2
-    ? `/assets/layers-v2/body-${grade}.webp`
-    : `/assets/layers/${category}-${grade}.webp`;
+    ? publicPath(`/assets/layers-v2/body-${grade}.webp`)
+    : publicPath(`/assets/layers/${category}-${grade}.webp`);
 
 export default function CatGame() {
   const [screen, setScreen] = useState<GameScreen>("home");
@@ -452,7 +453,7 @@ export default function CatGame() {
           <span className="float deco-ribbon">⋈</span>
           <span className="float deco-star">✦</span>
           <span className="float deco-ball">●</span>
-          <img className="consistent-cat hero-consistent-cat" src="/assets/cat-base.webp" alt="오늘도 냥꾸의 주황색 고양이" />
+          <img className="consistent-cat hero-consistent-cat" src={publicPath("/assets/cat-base.webp")} alt="오늘도 냥꾸의 주황색 고양이" />
           <div className="fabric-shadow" />
         </div>
       </main>

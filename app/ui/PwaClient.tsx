@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { PUBLIC_BASE_PATH, publicPath } from "../lib/publicPath";
 
 type InstallPromptEvent = Event & {
   prompt: () => Promise<void>;
@@ -28,7 +29,9 @@ export default function PwaClient() {
     window.addEventListener("appinstalled", handleInstalled);
 
     if ("serviceWorker" in navigator) {
-      void navigator.serviceWorker.register("/sw.js", { scope: "/" });
+      void navigator.serviceWorker.register(publicPath("/sw.js"), {
+        scope: `${PUBLIC_BASE_PATH}/`,
+      });
     }
 
     return () => {

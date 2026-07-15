@@ -672,7 +672,7 @@ button:focus-visible {
 .slot-grade-image { width: 122%; height: 122%; object-fit: contain; image-rendering: auto; transform: scale(var(--value-scale, 1)); filter: drop-shadow(0 3px 4px #3333); transition: transform .2s ease, filter .2s ease; }
 .slot-grade-body { width: 138%; height: 138%; }
 .slot-grade-toy { width: 112%; height: 112%; }
-.asset { display: inline-block; background-image: url("/assets/decorations-sprite.webp"); background-repeat: no-repeat; background-size: 300% 200%; }
+.asset { display: inline-block; background-image: var(--decorations-sprite); background-repeat: no-repeat; background-size: 300% 200%; }
 .asset-head { background-position: 0 0; }.asset-ears { background-position: 50% 0; }.asset-neck { background-position: 100% 0; }
 .asset-face { background-position: 0 100%; }.asset-body { background-position: 50% 100%; }.asset-toy { background-position: 100% 100%; }
 .slot-icon .asset { width: 48px; height: 48px; transform: scale(1.42); filter: drop-shadow(0 3px 4px #3333); }
@@ -1020,14 +1020,14 @@ button:focus-visible {
 .layered-cat.reaction-happy { animation: happyPop .42s ease-out both; }
 .layered-cat.reaction-upset { animation: uneasyLean .55s ease-out both; }
 .game-cat-label { display: block; margin-bottom: 2px; color: var(--color-accent); font: 800 8px var(--font-sans); letter-spacing: .04em; }
-.outfit-cat { width: clamp(126px, 24vw, 170px); aspect-ratio: 1; margin: 4px auto 8px; background-image: url("/assets/dressed-cats-sprite.webp"); background-repeat: no-repeat; background-size: 200% 200%; filter: drop-shadow(0 8px 8px #5c463326); transition: transform .2s ease; }
+.outfit-cat { width: clamp(126px, 24vw, 170px); aspect-ratio: 1; margin: 4px auto 8px; background-image: var(--dressed-cats-sprite); background-repeat: no-repeat; background-size: 200% 200%; filter: drop-shadow(0 8px 8px #5c463326); transition: transform .2s ease; }
 .outfit-cat.outfit-tier-0 { background-position: 0 0; }.outfit-cat.outfit-tier-1 { background-position: 100% 0; }.outfit-cat.outfit-tier-2 { background-position: 0 100%; }.outfit-cat.outfit-tier-3 { background-position: 100% 100%; filter: drop-shadow(0 0 8px #f2c95b) drop-shadow(0 9px 8px #5c463326); }
 .outfit-cat.over { transform: rotate(-2deg); filter: saturate(.85) drop-shadow(0 8px 8px #5c463326); }
 .layered-cat { position: relative; width: min(100%, 176px); aspect-ratio: 2 / 3; margin: 2px auto 8px; filter: drop-shadow(0 8px 8px #5c463326); }
 .layered-cat.over { transform: rotate(-2deg); filter: saturate(.85) drop-shadow(0 8px 8px #5c463326); }
 .cat-base-layer,.worn-layer { position: absolute; inset: 0; display: block; background-repeat: no-repeat; }
-.cat-base-layer { background-image: var(--cat-image, url("/assets/cat-base.webp")); background-size: contain; background-position: center; }
-.worn-layer { background-image: url("/assets/accessory-layers.webp"); background-size: 400% 600%; z-index: 3; }
+.cat-base-layer { background-image: var(--cat-image, var(--cat-base-image)); background-size: contain; background-position: center; }
+.worn-layer { background-image: var(--accessory-layers); background-size: 400% 600%; z-index: 3; }
 .layer-grade-0 { background-position-x: 0; }.layer-grade-1 { background-position-x: 33.333%; }.layer-grade-2 { background-position-x: 66.667%; }.layer-grade-3 { background-position-x: 100%; filter: drop-shadow(0 0 5px #ffd86b); }
 .worn-head { background-position-y: 0; z-index: 5; }.worn-ears { background-position-y: 20%; z-index: 6; }.worn-neck { background-position-y: 40%; z-index: 7; }.worn-face { background-position-y: 60%; z-index: 8; }.worn-body { background-position-y: 80%; z-index: 2; }.worn-toy { background-position-y: 100%; z-index: 9; }
 .worn-piece { position: absolute; display: block; height: auto; object-fit: contain; image-rendering: auto; backface-visibility: hidden; pointer-events: none; filter: drop-shadow(0 3px 3px #4b38262b); }

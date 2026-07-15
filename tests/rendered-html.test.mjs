@@ -45,11 +45,27 @@ test("ships an installable PWA manifest and offline worker", async () => {
 
   assert.equal(manifest.name, "오늘도 냥꾸");
   assert.equal(manifest.display, "standalone");
-  assert.equal(manifest.start_url, "/");
+  assert.equal(manifest.start_url, "./");
+  assert.equal(manifest.scope, "./");
   assert.ok(manifest.icons.some((icon) => icon.sizes === "192x192"));
   assert.ok(manifest.icons.some((icon) => icon.sizes === "512x512"));
   assert.match(worker, /caches\.open/);
   assert.match(worker, /request\.mode === "navigate"/);
+  assert.match(worker, /self\.registration\.scope/);
+});
+
+test("includes a GitHub Pages static deployment workflow and base path", async () => {
+  const [workflow, config, publicPath] = await Promise.all([
+    readFile(new URL("../.github/workflows/pages.yml", import.meta.url), "utf8"),
+    readFile(new URL("../next.config.ts", import.meta.url), "utf8"),
+    readFile(new URL("../app/lib/publicPath.ts", import.meta.url), "utf8"),
+  ]);
+
+  assert.match(workflow, /actions\/deploy-pages@v4/);
+  assert.match(workflow, /NEXT_PUBLIC_BASE_PATH: \/Kitty-Makeover/);
+  assert.match(config, /output: "export"/);
+  assert.match(config, /pagesBasePath = "\/Kitty-Makeover"/);
+  assert.match(publicPath, /NEXT_PUBLIC_BASE_PATH/);
 });
 
 test("Firebase writes are isolated to the Kitty Makeover namespace", async () => {

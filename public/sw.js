@@ -1,10 +1,12 @@
-const CACHE_NAME = "kitty-makeover-v1";
+const CACHE_NAME = "kitty-makeover-v2";
+const SCOPE_PATH = new URL(self.registration.scope).pathname.replace(/\/$/, "");
+const scopedPath = (path) => `${SCOPE_PATH}${path}`;
 const APP_SHELL = [
-  "/",
-  "/manifest.webmanifest",
-  "/icons/icon-192.png",
-  "/icons/icon-512.png",
-  "/assets/cat-base.webp"
+  scopedPath("/"),
+  scopedPath("/manifest.webmanifest"),
+  scopedPath("/icons/icon-192.png"),
+  scopedPath("/icons/icon-512.png"),
+  scopedPath("/assets/cat-base.webp")
 ];
 
 self.addEventListener("install", (event) => {
@@ -33,10 +35,10 @@ self.addEventListener("fetch", (event) => {
       fetch(request)
         .then((response) => {
           const copy = response.clone();
-          void caches.open(CACHE_NAME).then((cache) => cache.put("/", copy));
+          void caches.open(CACHE_NAME).then((cache) => cache.put(scopedPath("/"), copy));
           return response;
         })
-        .catch(() => caches.match("/")),
+        .catch(() => caches.match(scopedPath("/"))),
     );
     return;
   }
