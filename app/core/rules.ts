@@ -1,4 +1,52 @@
-import type { Card, CategoryId } from "../data/gameData";
+import { decorationFor, type Card, type CategoryId } from "../data/gameData";
+
+export type EquipmentItem = {
+  category: CategoryId;
+  grade: string;
+  round?: number;
+};
+
+export const equipmentGradeRank = (grade: string) =>
+  grade === "화려함" ? 3 : grade === "예쁨" ? 2 : grade === "평범함" ? 1 : 0;
+
+export function acquireRoundEquipment(
+  collection: EquipmentItem[],
+  hand: Card[],
+  values: Record<string, number>,
+  total: number,
+  target: number,
+  round: number,
+) {
+  if (total > target) {
+    return { collection, acquired: [] as EquipmentItem[], protected: [] as CategoryId[] };
+  }
+
+  let next = [...collection];
+  const acquired: EquipmentItem[] = [];
+  const protectedCategories: CategoryId[] = [];
+  const wornCategories = [...new Set(hand.map((card) => card.category))];
+
+  for (const category of wornCategories) {
+    const candidate: EquipmentItem = {
+      category,
+      grade: decorationFor(values[category] ?? 0),
+      round,
+    };
+    const owned = next.filter((item) => item.category === category);
+    const ownedBest = Math.max(-1, ...owned.map((item) => equipmentGradeRank(item.grade)));
+
+    if (ownedBest >= equipmentGradeRank(candidate.grade)) {
+      protectedCategories.push(category);
+      continue;
+    }
+
+    next = next.filter((item) => item.category !== category);
+    next.push(candidate);
+    acquired.push(candidate);
+  }
+
+  return { collection: next, acquired, protected: protectedCategories };
+}
 
 export type PlayerResult = { id: number; name: string; total: number };
 export function determineRoundWinners(players: PlayerResult[], target: number) {

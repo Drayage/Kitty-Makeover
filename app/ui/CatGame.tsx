@@ -9,11 +9,14 @@ import {
   type CategoryId,
 } from "../data/gameData";
 import {
+  acquireRoundEquipment,
   determineRoundWinners,
   emptySlots,
+  equipmentGradeRank,
   itemValues,
   nextStarter,
   playerTotal,
+  type EquipmentItem,
 } from "../core/rules";
 import { categoryVisuals, gradeIndex, themeCopy, visualFor } from "../data/visuals";
 import { catExpressionImage, catProfileFor, catProfiles } from "../data/catVisuals";
@@ -26,12 +29,20 @@ type Player = {
   ai: boolean;
   wins: number;
   hand: Card[];
-  collection: { category: CategoryId; grade: string; round?: number }[];
+  collection: EquipmentItem[];
 };
 type GameScreen = "home" | "setup" | "play" | "final";
 type RoundResult = ReturnType<typeof determineRoundWinners>;
+type SavedCatLook = {
+  id: string;
+  savedAt: number;
+  catId: string;
+  playerName: string;
+  wins: number;
+  equipment: Partial<Record<CategoryId, string>>;
+};
 type GameSave = {
-  schemaVersion: 2;
+  schemaVersion: 3;
   updatedAt: number;
   screen: "play" | "final";
   count: number;
@@ -50,21 +61,59 @@ type GameSave = {
 type SyncState = "idle" | "loading" | "syncing" | "synced" | "offline" | "error";
 
 const SAVE_KEY = "cat-dress-save";
+const ALBUM_KEY = "kitty-makeover-cat-album";
+const defaultFinalEquipment = (players: Player[]) =>
+  Object.fromEntries(
+    players.map((player) => {
+      const slots: Partial<Record<CategoryId, number>> = {};
+      player.collection.forEach((item, index) => {
+        const currentIndex = slots[item.category];
+        if (
+          currentIndex === undefined ||
+          equipmentGradeRank(item.grade) >
+            equipmentGradeRank(player.collection[currentIndex].grade)
+        ) {
+          slots[item.category] = index;
+        }
+      });
+      return [player.id, slots];
+    }),
+  ) as Record<number, Partial<Record<CategoryId, number>>>;
+const normalizeAlbum = (value: unknown): SavedCatLook[] =>
+  Array.isArray(value)
+    ? value
+        .filter(
+          (look): look is SavedCatLook =>
+            Boolean(
+              look &&
+                typeof look === "object" &&
+                typeof look.id === "string" &&
+                typeof look.catId === "string" &&
+                look.equipment &&
+                typeof look.equipment === "object",
+            ),
+        )
+        .slice(0, 10)
+    : [];
 const normalizeSave = (value: unknown): GameSave | null => {
   if (!value || typeof value !== "object") return null;
   const raw = value as Partial<GameSave>;
   if (!Array.isArray(raw.players) || !raw.players.length) return null;
   if (typeof raw.round !== "number" || typeof raw.target !== "number") return null;
 
-  const playerCount = raw.count ?? raw.players.length;
+  const normalizedPlayers = raw.players.map((player) => ({
+    ...player,
+    collection: Array.isArray(player.collection) ? player.collection : [],
+  }));
+  const playerCount = raw.count ?? normalizedPlayers.length;
   return {
-    schemaVersion: 2,
+    schemaVersion: 3,
     updatedAt: typeof raw.updatedAt === "number" ? raw.updatedAt : 0,
     screen: raw.screen === "final" ? "final" : "play",
     count: Math.min(6, Math.max(2, playerCount)),
     humanCount:
-      raw.humanCount ?? Math.max(1, raw.players.filter((player) => !player.ai).length),
-    players: raw.players,
+      raw.humanCount ?? Math.max(1, normalizedPlayers.filter((player) => !player.ai).length),
+    players: normalizedPlayers,
     round: raw.round,
     starter: raw.starter ?? 0,
     turn: raw.turn ?? 0,
@@ -73,18 +122,46 @@ const normalizeSave = (value: unknown): GameSave | null => {
     result: raw.result ?? null,
     catId: raw.catId ?? "orange",
     finalPlayerId: raw.finalPlayerId ?? 0,
-    finalEquipped: raw.finalEquipped ?? {},
+    finalEquipped:
+      raw.screen === "final" && raw.schemaVersion !== 3
+        ? defaultFinalEquipment(normalizedPlayers)
+        : raw.finalEquipped ?? {},
   };
 };
 const shuffle = <T,>(a: T[]) => [...a].sort(() => Math.random() - 0.5);
 const catFace = (target: number) =>
   target < 15 ? "− ﻌ −" : target < 27 ? "● ﻌ ●" : "✦ ﻌ ✦";
-const collectionGradeIndex = (grade: string) =>
-  grade === "화려함" ? 3 : grade === "예쁨" ? 2 : grade === "평범함" ? 1 : 0;
+const collectionGradeIndex = equipmentGradeRank;
 const layerPath = (category: CategoryId, grade: number) =>
   category === "body" && grade >= 2
     ? publicPath(`/assets/layers-v2/body-${grade}.webp`)
     : publicPath(`/assets/layers/${category}-${grade}.webp`);
+
+function SavedLookCat({ look, className = "" }: { look: SavedCatLook; className?: string }) {
+  const cat = catProfileFor(look.catId);
+  return (
+    <div
+      className={`layered-cat saved-look-cat ${className}`}
+      style={{ "--cat-image": `url("${cat.image}")` } as React.CSSProperties}
+      role="img"
+      aria-label={`${look.playerName}의 저장된 고양이 꾸미기`}
+    >
+      <span className="cat-base-layer" />
+      {categories.map(({ id }) => {
+        const grade = look.equipment[id];
+        return grade ? (
+          <img
+            className={`worn-piece worn-${id}`}
+            src={layerPath(id, collectionGradeIndex(grade))}
+            alt=""
+            aria-hidden="true"
+            key={id}
+          />
+        ) : null;
+      })}
+    </div>
+  );
+}
 
 export default function CatGame() {
   const [screen, setScreen] = useState<GameScreen>("home");
@@ -114,6 +191,10 @@ export default function CatGame() {
     Record<number, Partial<Record<CategoryId, number>>>
   >({});
   const [showFinalCompare, setShowFinalCompare] = useState(false);
+  const [album, setAlbum] = useState<SavedCatLook[]>([]);
+  const [featuredLook, setFeaturedLook] = useState<SavedCatLook | null>(null);
+  const [showAlbum, setShowAlbum] = useState(false);
+  const [albumNotice, setAlbumNotice] = useState("");
   const [catId, setCatId] = useState("orange");
   const [resumeSave, setResumeSave] = useState<GameSave | null>(null);
   const [syncState, setSyncState] = useState<SyncState>("idle");
@@ -124,6 +205,17 @@ export default function CatGame() {
   useEffect(() => {
     const saved = localStorage.getItem("cat-hand-sort");
     if (saved === "number" || saved === "category") setSortMode(saved);
+
+    const savedAlbum = localStorage.getItem(ALBUM_KEY);
+    if (savedAlbum) {
+      try {
+        const looks = normalizeAlbum(JSON.parse(savedAlbum));
+        setAlbum(looks);
+        if (looks.length) setFeaturedLook(looks[Math.floor(Math.random() * looks.length)]);
+      } catch {
+        localStorage.removeItem(ALBUM_KEY);
+      }
+    }
 
     const local = localStorage.getItem(SAVE_KEY);
     let localSave: GameSave | null = null;
@@ -289,22 +381,22 @@ export default function CatGame() {
     const r = determineRoundWinners(rows, target);
     setResult(r);
     setPlayers((ps) =>
-      ps.map((p) =>
-        r.winners.some((w) => w.id === p.id)
-          ? {
-              ...p,
-              wins: p.wins + 1,
-              collection: [
-                ...p.collection,
-                {
-                  category: p.hand[0]?.category ?? "head",
-                  grade: decorationFor(values[p.hand[0]?.category] ?? 0),
-                  round,
-                },
-              ],
-            }
-          : p,
-      ),
+      ps.map((p) => {
+        const playerRow = rows.find((row) => row.id === p.id)!;
+        const equipment = acquireRoundEquipment(
+          p.collection,
+          p.hand,
+          values,
+          playerRow.total,
+          target,
+          round,
+        );
+        return {
+          ...p,
+          wins: p.wins + (r.winners.some((winner) => winner.id === p.id) ? 1 : 0),
+          collection: equipment.collection,
+        };
+      }),
     );
   };
   useEffect(() => {
@@ -316,6 +408,8 @@ export default function CatGame() {
     const ids = result!.winners.map((w) => w.id);
     const updated = players;
     if (round >= 7 || updated.some((p) => p.wins >= 3)) {
+      setFinalPlayerId(updated.find((player) => !player.ai)?.id ?? updated[0]?.id ?? 0);
+      setFinalEquipped(defaultFinalEquipment(updated));
       setScreen("final");
       return;
     }
@@ -339,7 +433,7 @@ export default function CatGame() {
     if ((screen !== "play" && screen !== "final") || !players.length) return;
 
     const save: GameSave = {
-      schemaVersion: 2,
+      schemaVersion: 3,
       updatedAt: Date.now(),
       screen,
       count,
@@ -440,6 +534,9 @@ export default function CatGame() {
             <button onClick={() => setFast((v) => !v)}>
               ⚙ {fast ? "빠른 연출" : "설정"}
             </button>
+            <button onClick={() => setShowAlbum(true)}>
+              ▦ 내 냥꾸 도감 {album.length}/10
+            </button>
             <span className={`sync-status ${syncState}`} aria-live="polite">
               {syncState === "loading" && "저장 확인 중"}
               {syncState === "syncing" && "클라우드 저장 중"}
@@ -449,13 +546,67 @@ export default function CatGame() {
             </span>
           </nav>
         </div>
-        <div className="hero-stage" aria-label="리본과 방울로 꾸민 대표 고양이">
+        <div className="hero-stage" aria-label={featuredLook ? "내 냥꾸 도감에서 고른 대표 고양이" : "리본과 방울로 꾸민 대표 고양이"}>
           <span className="float deco-ribbon">⋈</span>
           <span className="float deco-star">✦</span>
           <span className="float deco-ball">●</span>
-          <img className="consistent-cat hero-consistent-cat" src={publicPath("/assets/cat-base.webp")} alt="오늘도 냥꾸의 주황색 고양이" />
+          {featuredLook ? (
+            <>
+              <SavedLookCat look={featuredLook} className="hero-saved-cat" />
+              <span className="featured-look-label">내 도감에서 찾아온 {featuredLook.playerName}의 고양이</span>
+            </>
+          ) : (
+            <img className="consistent-cat hero-consistent-cat" src={publicPath("/assets/cat-base.webp")} alt="오늘도 냥꾸의 주황색 고양이" />
+          )}
           <div className="fabric-shadow" />
         </div>
+        {showAlbum && (
+          <div className="album-backdrop" role="presentation" onMouseDown={() => setShowAlbum(false)}>
+            <section
+              className="album-dialog"
+              role="dialog"
+              aria-modal="true"
+              aria-labelledby="album-title"
+              onMouseDown={(event) => event.stopPropagation()}
+            >
+              <div className="album-heading">
+                <div>
+                  <p className="eyebrow">MY CAT COLLECTION</p>
+                  <h2 id="album-title">나의 냥꾸 도감</h2>
+                </div>
+                <button className="album-close" onClick={() => setShowAlbum(false)} aria-label="도감 닫기">×</button>
+              </div>
+              <p className="album-guide">파이널 드레싱룸에서 저장한 고양이를 최신순으로 10마리까지 간직해요.</p>
+              {album.length ? (
+                <div className="album-grid">
+                  {album.map((look, index) => (
+                    <article key={look.id}>
+                      <span className="album-number">NO. {String(album.length - index).padStart(2, "0")}</span>
+                      <SavedLookCat look={look} />
+                      <strong>{catProfileFor(look.catId).name}</strong>
+                      <small>{look.playerName} · 만족도 {look.wins} · 장식 {Object.keys(look.equipment).length}개</small>
+                      <button
+                        className="album-feature"
+                        onClick={() => {
+                          setFeaturedLook(look);
+                          setShowAlbum(false);
+                        }}
+                      >
+                        타이틀에 보여주기
+                      </button>
+                    </article>
+                  ))}
+                </div>
+              ) : (
+                <div className="album-empty">
+                  <span aria-hidden="true">♡</span>
+                  <strong>아직 저장한 고양이가 없어요.</strong>
+                  <p>게임을 끝낸 뒤 내 고양이를 도감에 저장해 보세요.</p>
+                </div>
+              )}
+            </section>
+          </div>
+        )}
       </main>
     );
   if (screen === "setup")
@@ -523,6 +674,28 @@ export default function CatGame() {
         return { ...previous, [player.id]: nextSlots };
       });
     };
+    const saveFinalLook = () => {
+      if (finalPlayer.ai) {
+        setAlbumNotice("사람 플레이어의 고양이만 내 도감에 저장할 수 있어요.");
+        return;
+      }
+      const equipment = Object.fromEntries(
+        equippedFor(finalPlayer).map((item) => [item.category, item.grade]),
+      ) as Partial<Record<CategoryId, string>>;
+      const look: SavedCatLook = {
+        id: typeof crypto.randomUUID === "function" ? crypto.randomUUID() : `${Date.now()}-${finalPlayer.id}`,
+        savedAt: Date.now(),
+        catId,
+        playerName: finalPlayer.name,
+        wins: finalPlayer.wins,
+        equipment,
+      };
+      const nextAlbum = [look, ...album].slice(0, 10);
+      localStorage.setItem(ALBUM_KEY, JSON.stringify(nextAlbum));
+      setAlbum(nextAlbum);
+      setFeaturedLook(look);
+      setAlbumNotice(`도감에 저장했어요. ${nextAlbum.length}/10`);
+    };
     return (
       <main className="final" style={catStyle}>
         <p className="eyebrow">FINAL DRESSING ROOM</p>
@@ -556,7 +729,7 @@ export default function CatGame() {
           </div>
           <div className="wardrobe">
             <h2>획득한 장식</h2>
-            <p className="wardrobe-rule">라운드 승자의 남은 첫 카드 종류를 획득하며, 그 장식의 이번 가치로 등급이 정해져요.</p>
+            <p className="wardrobe-rule">목표를 초과하지 않은 라운드에서 손에 남겨 착용한 장식을 얻어요. 같은 부위는 가장 높은 등급만 남아요.</p>
             {finalPlayer.collection.length ? (
               finalPlayer.collection.map((x, i) => (
                 <button
@@ -568,7 +741,7 @@ export default function CatGame() {
                   <b>{categoryVisuals[x.category].icon}</b>
                   <span>
                     {categoryVisuals[x.category].names[collectionGradeIndex(x.grade)]}
-                    <small>{x.grade} · {x.round ? `${x.round}라운드 승리 보상` : "승리 보상"}</small>
+                    <small>{x.grade} · {x.round ? `${x.round}라운드 획득` : "이전 게임 획득"}</small>
                   </span>
                 </button>
               ))
@@ -578,6 +751,10 @@ export default function CatGame() {
             <button className="compare" onClick={() => setShowFinalCompare((shown) => !shown)}>
               {showFinalCompare ? "비교 닫기" : "◫ 모두 비교하기"}
             </button>
+            <button className="save-look" onClick={saveFinalLook} disabled={finalPlayer.ai}>
+              ♡ 이 모습 도감에 저장
+            </button>
+            {albumNotice && <span className="album-notice" aria-live="polite">{albumNotice}</span>}
           </div>
         </div>
         {showFinalCompare && <div className="final-grid">
@@ -830,6 +1007,7 @@ export default function CatGame() {
               const won = result.winners.some((w) => w.id === d.id);
               const reaction = d.exceeded ? "upset" : won ? "happy" : "neutral";
               const wornCategories = [...new Set(p.hand.map((card) => card.category))];
+              const acquiredThisRound = p.collection.filter((item) => item.round === round);
               return <article className={won ? "won" : ""} key={d.id}>
                 <div className={`layered-cat reaction-${reaction} ${d.exceeded ? "over" : ""}`} role="img" aria-label={`${d.name}의 완성 꾸미기, ${reaction === "happy" ? "기쁜" : reaction === "upset" ? "불편한" : "편안한"} 표정`}>
                   <span className="cat-base-layer" style={{ backgroundImage: `url("${catExpressionImage(currentCat, reaction)}")` }} />
@@ -842,10 +1020,17 @@ export default function CatGame() {
                 <span className="look-score">꾸미기 강도 {d.total}</span>
                 <span className={`reaction-copy ${reaction}`}>{reaction === "happy" ? "기분 최고!" : reaction === "upset" ? "조금 부담스러워…" : "편안해 보여요"}</span>
                 <small>목표와 {d.distance} 차이 {d.exceeded ? "· 조금 과함" : "· 부담 없음"}</small>
+                <span className={`round-acquire ${d.exceeded ? "none" : ""}`}>
+                  {d.exceeded
+                    ? "장식 획득 없음"
+                    : acquiredThisRound.length
+                      ? `획득: ${acquiredThisRound.map((item) => categoryVisuals[item.category].names[collectionGradeIndex(item.grade)]).join(", ")}`
+                      : "보유 장식이 같거나 더 높은 등급이에요"}
+                </span>
               </article>;
             })}
           </div>
-          <div className="reward">🎁 승리한 집사는 새 장식을 획득했어요</div>
+          <div className="reward">🎁 승패와 관계없이 목표를 넘지 않은 집사는 착용 장식을 획득해요</div>
           <button className="primary" onClick={nextRound}>
             {round >= 7 || players.some((p) => p.wins >= 3)
               ? "최종 꾸미기 보기"

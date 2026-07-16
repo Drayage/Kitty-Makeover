@@ -1,4 +1,4 @@
-const CACHE_NAME = "kitty-makeover-v2";
+const CACHE_NAME = "kitty-makeover-v3";
 const SCOPE_PATH = new URL(self.registration.scope).pathname.replace(/\/$/, "");
 const scopedPath = (path) => `${SCOPE_PATH}${path}`;
 const APP_SHELL = [
