@@ -1,5 +1,5 @@
 import { getApps, initializeApp } from "firebase/app";
-import { get, getDatabase, onValue, ref, remove, set } from "firebase/database";
+import { get, getDatabase, ref, remove, set } from "firebase/database";
 
 const firebaseConfig = {
   apiKey: "AIzaSyDnEYQRvb16iW0HZyq4bgrvtnPysDbeFBc",
@@ -28,9 +28,8 @@ function gameSaveRef() {
   return ref(getDatabase(app), `${FIREBASE_GAME_ROOT}/saves/${deviceId()}`);
 }
 
-function dbRef(path: string) {
-  const app = getApps()[0] ?? initializeApp(firebaseConfig);
-  return ref(getDatabase(app), `${FIREBASE_GAME_ROOT}/${path}`);
+function roomUrl(code: string) {
+  return `${firebaseConfig.databaseURL}/${FIREBASE_GAME_ROOT}/rooms/${code}.json`;
 }
 
 export async function saveCloudGame<T extends object>(data: T) {
@@ -64,7 +63,12 @@ export function makeRoomCode() {
 
 export async function saveGameRoom<T extends object>(room: OnlineRoom<T>) {
   if (typeof window === "undefined" || !navigator.onLine) return false;
-  await set(dbRef(`rooms/${room.code}`), { ...room, updatedAt: Date.now() });
+  const response = await fetch(roomUrl(room.code), {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ ...room, updatedAt: Date.now() }),
+  });
+  if (!response.ok) throw new Error(`Firebase ${response.status}`);
   return true;
 }
 
@@ -72,8 +76,9 @@ export async function loadGameRoom<T>(code: string) {
   if (typeof window === "undefined" || !navigator.onLine) return null;
   const normalized = code.trim().toUpperCase();
   if (!/^[A-Z0-9]{4,8}$/.test(normalized)) return null;
-  const snapshot = await get(dbRef(`rooms/${normalized}`));
-  return snapshot.exists() ? (snapshot.val() as OnlineRoom<T>) : null;
+  const response = await fetch(roomUrl(normalized), { cache: "no-store" });
+  if (!response.ok) throw new Error(`Firebase ${response.status}`);
+  return (await response.json()) as OnlineRoom<T> | null;
 }
 
 export function subscribeGameRoom<T>(
@@ -82,7 +87,20 @@ export function subscribeGameRoom<T>(
 ) {
   const normalized = code.trim().toUpperCase();
   if (typeof window === "undefined" || !/^[A-Z0-9]{4,8}$/.test(normalized)) return () => undefined;
-  return onValue(dbRef(`rooms/${normalized}`), (snapshot) => {
-    callback(snapshot.exists() ? (snapshot.val() as OnlineRoom<T>) : null);
-  });
+  let active = true;
+  const read = async () => {
+    try {
+      callback(await loadGameRoom<T>(normalized));
+    } catch {
+      callback(null);
+    }
+  };
+  void read();
+  const timer = window.setInterval(() => {
+    if (active) void read();
+  }, 1000);
+  return () => {
+    active = false;
+    window.clearInterval(timer);
+  };
 }

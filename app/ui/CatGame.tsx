@@ -216,6 +216,7 @@ export default function CatGame() {
   const [onlineSession, setOnlineSession] = useState<OnlineSession>(null);
   const [roomCodeInput, setRoomCodeInput] = useState("");
   const [roomNotice, setRoomNotice] = useState("");
+  const [roomBusy, setRoomBusy] = useState(false);
   const applyingRemote = useRef(false);
   const currentCat = catProfileFor(catId);
   const catStyle = {
@@ -372,45 +373,54 @@ export default function CatGame() {
       setRoomNotice("온라인 상태에서만 방을 만들 수 있어요.");
       return;
     }
-    const playerKey = deviceId();
-    const code = makeRoomCode();
-    const gameCat = catProfiles[Math.floor(Math.random() * catProfiles.length)];
-    const firstTarget = 12 + Math.floor(Math.random() * 19);
-    const onlinePlayers: Player[] = Array.from({ length: count }, (_, i) => ({
-      id: i,
-      name:
-        i < humanCount
-          ? i === 0
-            ? `집사 ${i + 1}`
-            : `대기중 ${i + 1}`
-          : `AI ${i - humanCount + 1}`,
-      ai: i >= humanCount,
-      playerKey: i === 0 ? playerKey : undefined,
-      wins: 0,
-      hand: [],
-      collection: [],
-    }));
-    const save: GameSave = {
-      schemaVersion: 3,
-      updatedAt: Date.now(),
-      screen: "play",
-      count,
-      humanCount,
-      players: deal(onlinePlayers),
-      round: 1,
-      starter: 0,
-      turn: 0,
-      target: firstTarget,
-      placed: emptySlots(activeCats),
-      result: null,
-      catId: gameCat.id,
-      finalPlayerId: 0,
-      finalEquipped: {},
-    };
-    await saveGameRoom<GameSave>({ code, hostId: playerKey, updatedAt: Date.now(), game: save });
-    setOnlineSession({ code, hostId: playerKey, playerKey });
-    setRoomNotice(`온라인 방 ${code} 생성됨`);
-    resumeGame(save);
+    setRoomBusy(true);
+    setRoomNotice("온라인 방 만드는 중...");
+    try {
+      const playerKey = deviceId();
+      const code = makeRoomCode();
+      const gameCat = catProfiles[Math.floor(Math.random() * catProfiles.length)];
+      const firstTarget = 12 + Math.floor(Math.random() * 19);
+      const onlinePlayers: Player[] = Array.from({ length: count }, (_, i) => ({
+        id: i,
+        name:
+          i < humanCount
+            ? i === 0
+              ? `집사 ${i + 1}`
+              : `대기중 ${i + 1}`
+            : `AI ${i - humanCount + 1}`,
+        ai: i >= humanCount,
+        playerKey: i === 0 ? playerKey : undefined,
+        wins: 0,
+        hand: [],
+        collection: [],
+      }));
+      const save: GameSave = {
+        schemaVersion: 3,
+        updatedAt: Date.now(),
+        screen: "play",
+        count,
+        humanCount,
+        players: deal(onlinePlayers),
+        round: 1,
+        starter: 0,
+        turn: 0,
+        target: firstTarget,
+        placed: emptySlots(activeCats),
+        result: null,
+        catId: gameCat.id,
+        finalPlayerId: 0,
+        finalEquipped: {},
+      };
+      await saveGameRoom<GameSave>({ code, hostId: playerKey, updatedAt: Date.now(), game: save });
+      setOnlineSession({ code, hostId: playerKey, playerKey });
+      setRoomNotice(`온라인 방 ${code} 생성됨`);
+      window.alert(`온라인 방이 만들어졌어요.\n방 코드: ${code}`);
+      resumeGame(save);
+    } catch (error) {
+      setRoomNotice(`방 만들기 실패: ${error instanceof Error ? error.message : "Firebase 연결을 확인해 주세요."}`);
+    } finally {
+      setRoomBusy(false);
+    }
   };
 
   const joinOnlineGame = async () => {
@@ -419,29 +429,37 @@ export default function CatGame() {
       setRoomNotice("방 코드를 입력해 주세요.");
       return;
     }
-    const room = await loadGameRoom<GameSave>(code);
-    const save = normalizeSave(room?.game);
-    if (!room || !save) {
-      setRoomNotice("방을 찾을 수 없어요.");
-      return;
+    setRoomBusy(true);
+    setRoomNotice("온라인 방 찾는 중...");
+    try {
+      const room = await loadGameRoom<GameSave>(code);
+      const save = normalizeSave(room?.game);
+      if (!room || !save) {
+        setRoomNotice("방을 찾을 수 없어요.");
+        return;
+      }
+      const playerKey = deviceId();
+      const alreadyJoined = save.players.some((player) => player.playerKey === playerKey);
+      let joined = alreadyJoined;
+      const playersWithSeat = save.players.map((player) => {
+        if (joined || player.ai || player.playerKey) return player;
+        joined = true;
+        return { ...player, name: `집사 ${player.id + 1}`, playerKey };
+      });
+      if (!joined) {
+        setRoomNotice("참가 가능한 사람 슬롯이 없어요.");
+        return;
+      }
+      const nextSave = { ...save, players: playersWithSeat, updatedAt: Date.now() };
+      await saveGameRoom<GameSave>({ ...room, game: nextSave });
+      setOnlineSession({ code: room.code, hostId: room.hostId, playerKey });
+      setRoomNotice(`온라인 방 ${room.code} 참가됨`);
+      resumeGame(nextSave);
+    } catch (error) {
+      setRoomNotice(`참가 실패: ${error instanceof Error ? error.message : "Firebase 연결을 확인해 주세요."}`);
+    } finally {
+      setRoomBusy(false);
     }
-    const playerKey = deviceId();
-    const alreadyJoined = save.players.some((player) => player.playerKey === playerKey);
-    let joined = alreadyJoined;
-    const playersWithSeat = save.players.map((player) => {
-      if (joined || player.ai || player.playerKey) return player;
-      joined = true;
-      return { ...player, name: `집사 ${player.id + 1}`, playerKey };
-    });
-    if (!joined) {
-      setRoomNotice("참가 가능한 사람 슬롯이 없어요.");
-      return;
-    }
-    const nextSave = { ...save, players: playersWithSeat, updatedAt: Date.now() };
-    await saveGameRoom<GameSave>({ ...room, game: nextSave });
-    setOnlineSession({ code: room.code, hostId: room.hostId, playerKey });
-    setRoomNotice(`온라인 방 ${room.code} 참가됨`);
-    resumeGame(nextSave);
   };
 
   const place = (cat: CategoryId) => {
@@ -669,7 +687,9 @@ export default function CatGame() {
                 placeholder="예: A7K2Q"
                 maxLength={8}
               />
-              <button onClick={joinOnlineGame}>참가</button>
+              <button onClick={joinOnlineGame} disabled={roomBusy}>
+                {roomBusy ? "확인 중" : "참가"}
+              </button>
             </div>
             {roomNotice && <small aria-live="polite">{roomNotice}</small>}
           </div>
@@ -808,8 +828,8 @@ export default function CatGame() {
         <button className="primary" onClick={startGame}>
           고양이 만나러 가기 →
         </button>
-        <button className="secondary online-create" onClick={createOnlineGame}>
-          온라인 방 만들기
+        <button className="secondary online-create" onClick={createOnlineGame} disabled={roomBusy}>
+          {roomBusy ? "방 만드는 중..." : "온라인 방 만들기"}
         </button>
         {roomNotice && <p className="room-notice" aria-live="polite">{roomNotice}</p>}
       </main>
