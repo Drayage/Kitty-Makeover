@@ -1,5 +1,5 @@
 "use client";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   categories,
   decorationFor,
@@ -20,13 +20,23 @@ import {
 } from "../core/rules";
 import { categoryVisuals, gradeIndex, themeCopy, visualFor } from "../data/visuals";
 import { catExpressionImage, catProfileFor, catProfiles } from "../data/catVisuals";
-import { clearCloudGame, loadCloudGame, saveCloudGame } from "../data/firebase";
+import {
+  clearCloudGame,
+  deviceId,
+  loadCloudGame,
+  loadGameRoom,
+  makeRoomCode,
+  saveCloudGame,
+  saveGameRoom,
+  subscribeGameRoom,
+} from "../data/firebase";
 import { publicPath } from "../lib/publicPath";
 
 type Player = {
   id: number;
   name: string;
   ai: boolean;
+  playerKey?: string;
   wins: number;
   hand: Card[];
   collection: EquipmentItem[];
@@ -59,6 +69,11 @@ type GameSave = {
   finalEquipped: Record<number, Partial<Record<CategoryId, number>>>;
 };
 type SyncState = "idle" | "loading" | "syncing" | "synced" | "offline" | "error";
+type OnlineSession = {
+  code: string;
+  hostId: string;
+  playerKey: string;
+} | null;
 
 const SAVE_KEY = "cat-dress-save";
 const ALBUM_KEY = "kitty-makeover-cat-album";
@@ -198,6 +213,10 @@ export default function CatGame() {
   const [catId, setCatId] = useState("orange");
   const [resumeSave, setResumeSave] = useState<GameSave | null>(null);
   const [syncState, setSyncState] = useState<SyncState>("idle");
+  const [onlineSession, setOnlineSession] = useState<OnlineSession>(null);
+  const [roomCodeInput, setRoomCodeInput] = useState("");
+  const [roomNotice, setRoomNotice] = useState("");
+  const applyingRemote = useRef(false);
   const currentCat = catProfileFor(catId);
   const catStyle = {
     "--cat-image": `url("${currentCat.image}")`,
@@ -248,10 +267,38 @@ export default function CatGame() {
       cancelled = true;
     };
   }, []);
+
+  useEffect(() => {
+    if (!onlineSession) return;
+    setSyncState(navigator.onLine ? "syncing" : "offline");
+    const unsubscribe = subscribeGameRoom<GameSave>(onlineSession.code, (room) => {
+      if (!room?.game) {
+        setRoomNotice("온라인 방을 찾을 수 없어요.");
+        setSyncState("error");
+        return;
+      }
+      applyingRemote.current = true;
+      resumeGame(normalizeSave(room.game) ?? room.game);
+      setSyncState("synced");
+      window.setTimeout(() => {
+        applyingRemote.current = false;
+      }, 0);
+    });
+    return unsubscribe;
+  }, [onlineSession?.code]);
   const totalPlaced = Object.values(placed).reduce((n, a) => n + a.length, 0);
   const needed = activeCats.length * 2;
   const currentId = (starter + turn) % Math.max(count, 1);
   const current = players[currentId];
+  const localPlayerKey = onlineSession?.playerKey;
+  const localPlayer = localPlayerKey
+    ? players.find((player) => player.playerKey === localPlayerKey)
+    : null;
+  const isHost = Boolean(onlineSession && onlineSession.hostId === localPlayerKey);
+  const isOnlineTurn =
+    !onlineSession || Boolean(localPlayerKey && current?.playerKey === localPlayerKey);
+  const canControlTurn = !onlineSession || Boolean(localPlayerKey && current?.playerKey === localPlayerKey);
+  const canAdvanceSharedStep = !onlineSession || isHost;
   const visibleHand = useMemo(
     () =>
       [...(current?.hand ?? [])].sort((a, b) =>
@@ -295,6 +342,7 @@ export default function CatGame() {
     });
   };
   const startGame = () => {
+    setOnlineSession(null);
     const gameCat = catProfiles[Math.floor(Math.random() * catProfiles.length)];
     const ps = Array.from({ length: count }, (_, i) => ({
       id: i,
@@ -319,7 +367,85 @@ export default function CatGame() {
     setScreen("play");
   };
 
+  const createOnlineGame = async () => {
+    if (!navigator.onLine) {
+      setRoomNotice("온라인 상태에서만 방을 만들 수 있어요.");
+      return;
+    }
+    const playerKey = deviceId();
+    const code = makeRoomCode();
+    const gameCat = catProfiles[Math.floor(Math.random() * catProfiles.length)];
+    const firstTarget = 12 + Math.floor(Math.random() * 19);
+    const onlinePlayers: Player[] = Array.from({ length: count }, (_, i) => ({
+      id: i,
+      name:
+        i < humanCount
+          ? i === 0
+            ? `집사 ${i + 1}`
+            : `대기중 ${i + 1}`
+          : `AI ${i - humanCount + 1}`,
+      ai: i >= humanCount,
+      playerKey: i === 0 ? playerKey : undefined,
+      wins: 0,
+      hand: [],
+      collection: [],
+    }));
+    const save: GameSave = {
+      schemaVersion: 3,
+      updatedAt: Date.now(),
+      screen: "play",
+      count,
+      humanCount,
+      players: deal(onlinePlayers),
+      round: 1,
+      starter: 0,
+      turn: 0,
+      target: firstTarget,
+      placed: emptySlots(activeCats),
+      result: null,
+      catId: gameCat.id,
+      finalPlayerId: 0,
+      finalEquipped: {},
+    };
+    await saveGameRoom<GameSave>({ code, hostId: playerKey, updatedAt: Date.now(), game: save });
+    setOnlineSession({ code, hostId: playerKey, playerKey });
+    setRoomNotice(`온라인 방 ${code} 생성됨`);
+    resumeGame(save);
+  };
+
+  const joinOnlineGame = async () => {
+    const code = roomCodeInput.trim().toUpperCase();
+    if (!code) {
+      setRoomNotice("방 코드를 입력해 주세요.");
+      return;
+    }
+    const room = await loadGameRoom<GameSave>(code);
+    const save = normalizeSave(room?.game);
+    if (!room || !save) {
+      setRoomNotice("방을 찾을 수 없어요.");
+      return;
+    }
+    const playerKey = deviceId();
+    const alreadyJoined = save.players.some((player) => player.playerKey === playerKey);
+    let joined = alreadyJoined;
+    const playersWithSeat = save.players.map((player) => {
+      if (joined || player.ai || player.playerKey) return player;
+      joined = true;
+      return { ...player, name: `집사 ${player.id + 1}`, playerKey };
+    });
+    if (!joined) {
+      setRoomNotice("참가 가능한 사람 슬롯이 없어요.");
+      return;
+    }
+    const nextSave = { ...save, players: playersWithSeat, updatedAt: Date.now() };
+    await saveGameRoom<GameSave>({ ...room, game: nextSave });
+    setOnlineSession({ code: room.code, hostId: room.hostId, playerKey });
+    setRoomNotice(`온라인 방 ${room.code} 참가됨`);
+    resumeGame(nextSave);
+  };
+
   const place = (cat: CategoryId) => {
+    if (!canControlTurn) return;
     if (!selected || placed[cat].length >= 2) return;
     const ps = players.map((p, i) =>
       i === currentId
@@ -333,7 +459,7 @@ export default function CatGame() {
     setMessage("다음 집사의 차례예요.");
   };
   useEffect(() => {
-    if (screen !== "play" || !current?.ai || totalPlaced >= needed || result)
+    if (screen !== "play" || !current?.ai || (onlineSession && !isHost) || totalPlaced >= needed || result)
       return;
     const timer = setTimeout(() => {
       const card = current.hand[0];
@@ -372,6 +498,7 @@ export default function CatGame() {
   }, [screen, currentId, totalPlaced, result]);
 
   const score = () => {
+    if (!canAdvanceSharedStep) return;
     const values = itemValues(placed);
     const rows = players.map((p) => ({
       id: p.id,
@@ -405,6 +532,7 @@ export default function CatGame() {
     }
   }, [totalPlaced, needed, result]);
   const nextRound = () => {
+    if (!canAdvanceSharedStep) return;
     const ids = result!.winners.map((w) => w.id);
     const updated = players;
     if (round >= 7 || updated.some((p) => p.wins >= 3)) {
@@ -431,6 +559,7 @@ export default function CatGame() {
   };
   useEffect(() => {
     if ((screen !== "play" && screen !== "final") || !players.length) return;
+    if (applyingRemote.current) return;
 
     const save: GameSave = {
       schemaVersion: 3,
@@ -454,7 +583,15 @@ export default function CatGame() {
     setResumeSave(save);
     setSyncState(navigator.onLine ? "syncing" : "offline");
     const timer = window.setTimeout(() => {
-      void saveCloudGame(save)
+      const sync = onlineSession
+        ? saveGameRoom<GameSave>({
+            code: onlineSession.code,
+            hostId: onlineSession.hostId,
+            updatedAt: Date.now(),
+            game: save,
+          })
+        : saveCloudGame(save);
+      void sync
         .then((saved) => setSyncState(saved ? "synced" : "offline"))
         .catch(() => setSyncState(navigator.onLine ? "error" : "offline"));
     }, 500);
@@ -474,6 +611,7 @@ export default function CatGame() {
     catId,
     finalPlayerId,
     finalEquipped,
+    onlineSession,
   ]);
 
   if (screen === "home")
@@ -520,6 +658,20 @@ export default function CatGame() {
                 <small>지난 게임</small>이어하기
               </span>
             </button>
+          </div>
+          <div className="online-join">
+            <label htmlFor="room-code">온라인 방 코드</label>
+            <div>
+              <input
+                id="room-code"
+                value={roomCodeInput}
+                onChange={(event) => setRoomCodeInput(event.target.value.toUpperCase())}
+                placeholder="예: A7K2Q"
+                maxLength={8}
+              />
+              <button onClick={joinOnlineGame}>참가</button>
+            </div>
+            {roomNotice && <small aria-live="polite">{roomNotice}</small>}
           </div>
           <nav>
             <button
@@ -656,6 +808,10 @@ export default function CatGame() {
         <button className="primary" onClick={startGame}>
           고양이 만나러 가기 →
         </button>
+        <button className="secondary online-create" onClick={createOnlineGame}>
+          온라인 방 만들기
+        </button>
+        {roomNotice && <p className="room-notice" aria-live="polite">{roomNotice}</p>}
       </main>
     );
   if (screen === "final") {
@@ -827,6 +983,15 @@ export default function CatGame() {
           •••
         </button>
       </header>
+      {onlineSession && (
+        <section className="online-room-bar" aria-live="polite">
+          <strong>온라인 방 {onlineSession.code}</strong>
+          <span>
+            내 슬롯: {localPlayer?.name ?? "관전"} · {isHost ? "방장" : "참가자"}
+          </span>
+          {!isOnlineTurn && <em>{current?.name}의 선택을 기다리는 중</em>}
+        </section>
+      )}
       <section className="table-layout">
         <aside className="mood-panel">
           <div className="mood-cat">
@@ -927,7 +1092,7 @@ export default function CatGame() {
           ))}
         </aside>
       </section>
-      {!result && totalPlaced < needed && current && !current.ai && (
+      {!result && totalPlaced < needed && current && !current.ai && canControlTurn && (
         <footer>
           <div className="action-copy">
             <b>
@@ -981,10 +1146,13 @@ export default function CatGame() {
           </div>
         </footer>
       )}
-      {!result && totalPlaced === needed && (
+      {!result && totalPlaced === needed && canAdvanceSharedStep && (
         <button className="floating primary" onClick={score}>
           ✦ 꾸미기 결과 계산
         </button>
+      )}
+      {!result && totalPlaced === needed && !canAdvanceSharedStep && (
+        <div className="floating wait-chip">방장이 결과를 계산하는 중</div>
       )}
       {result && (
         <div
@@ -1031,11 +1199,15 @@ export default function CatGame() {
             })}
           </div>
           <div className="reward">🎁 승패와 관계없이 목표를 넘지 않은 집사는 착용 장식을 획득해요</div>
-          <button className="primary" onClick={nextRound}>
-            {round >= 7 || players.some((p) => p.wins >= 3)
-              ? "최종 꾸미기 보기"
-              : "다음 라운드 →"}
-          </button>
+          {canAdvanceSharedStep ? (
+            <button className="primary" onClick={nextRound}>
+              {round >= 7 || players.some((p) => p.wins >= 3)
+                ? "최종 꾸미기 보기"
+                : "다음 라운드 →"}
+            </button>
+          ) : (
+            <div className="wait-chip">방장이 다음 단계로 넘기는 중</div>
+          )}
         </div>
       )}
     </main>
